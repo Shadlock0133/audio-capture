@@ -1,8 +1,7 @@
 use std::{fmt, mem::size_of, ptr::null_mut, time::Duration};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use winapi::{
-    shared::{
+use winapi::{Class, Interface, shared::{
         guiddef,
         ksmedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, KSDATAFORMAT_SUBTYPE_PCM},
         mmreg::{
@@ -10,29 +9,19 @@ use winapi::{
             WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM,
         },
         winerror::S_OK,
-    },
-    um::{
-        audioclient::{
+    }, um::{audioclient::{
             IAudioCaptureClient, IAudioClient,
             AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
             AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR,
-        },
-        audiosessiontypes::{
+        }, audiosessiontypes::{
             AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-        },
-        combaseapi::{CoCreateInstance, CoUninitialize, CLSCTX_ALL},
-        mmdeviceapi::{
+        }, combaseapi::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, CoUninitialize}, mmdeviceapi::{
             eConsole, eRender, IMMDevice, IMMDeviceEnumerator,
             MMDeviceEnumerator,
-        },
-        objbase::CoInitialize,
-        winbase::{
+        }, objbase::CoInitialize, winbase::{
             FormatMessageA, LocalFree, FORMAT_MESSAGE_ALLOCATE_BUFFER,
             FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
-        },
-    },
-    Class, Interface,
-};
+        }}};
 
 macro_rules! read_unaligned {
     ($v:ident $(. $field:ident)*) => {
@@ -106,6 +95,8 @@ struct AudioCapture {
     buffer_frame_size: u32,
     wave_format: *mut WAVEFORMATEX,
     channels: u16,
+    enumerator: *mut IMMDeviceEnumerator,
+    device: *mut IMMDevice,
     client: *mut IAudioClient,
     capture_client: *mut IAudioCaptureClient,
 }
@@ -193,6 +184,8 @@ impl AudioCapture {
             buffer_frame_size,
             wave_format,
             channels,
+            enumerator,
+            device,
             client,
             capture_client,
         })
@@ -311,14 +304,22 @@ impl AudioCapture {
 
 impl Drop for AudioCapture {
     fn drop(&mut self) {
-        unsafe { CoUninitialize() };
+        unsafe {
+            CoTaskMemFree(self.wave_format as _);
+            (*self.capture_client).Release();
+            (*self.client).Release();
+            (*self.device).Release();
+            (*self.enumerator).Release();
+            CoUninitialize();
+        }
     }
 }
 
+#[allow(unused)]
 struct Info {
-    is_silent: bool,
-    data_discontinuity: bool,
-    timestamp_error: bool,
+    pub is_silent: bool,
+    pub data_discontinuity: bool,
+    pub timestamp_error: bool,
 }
 
 #[derive(Debug)]
@@ -378,6 +379,7 @@ fn main() {
         println!();
     }
 
+    audio_capture.stop().unwrap();
     writer.finalize().unwrap();
     println!("Finalized");
 }
