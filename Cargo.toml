@@ -1,0 +1,19 @@
+[package]
+name = "earplugs"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+hound = "3.4.0"
+cpal = "0.13.4"
+
+[dependencies.winapi]
+version = "0.3.9"
+features = [
+    "combaseapi",
+    "mmdeviceapi",
+    "winbase",
+    "winerror"
+]
