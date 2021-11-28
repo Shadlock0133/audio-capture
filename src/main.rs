@@ -148,15 +148,6 @@ impl AudioCapture {
             )
         })?;
 
-        winapi_result(unsafe {
-            (&*device).Activate(
-                &IAudioClient::uuidof(),
-                CLSCTX_ALL,
-                null_mut(),
-                &mut client as *mut _ as _,
-            )
-        })?;
-
         let mut wave_format: *mut WAVEFORMATEX = null_mut();
         winapi_result(unsafe { (&*client).GetMixFormat(&mut wave_format) })
             .unwrap();
@@ -164,8 +155,11 @@ impl AudioCapture {
         let channels = unsafe { read_unaligned!(wave_format.nChannels) };
 
         // 100ns unit
-        let dur = buffer_duration.as_secs() as i64 * 100_000_000_000
-            + buffer_duration.subsec_nanos() as i64 * 100;
+        let dur = (buffer_duration.as_secs() as i64)
+            .checked_mul(100_000_000_000)
+            .expect("duration math overflow")
+            .checked_add(buffer_duration.subsec_nanos() as i64 * 100)
+            .expect("duration math overflow");
         winapi_result(unsafe {
             (&*client).Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
