@@ -1,11 +1,9 @@
 use std::{mem::size_of, ptr::null_mut, time::Duration};
 
 use winapi::{
-    shared::{
-        mmreg::{
-            WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVE_FORMAT_EXTENSIBLE,
-            WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM,
-        },
+    shared::mmreg::{
+        WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVE_FORMAT_EXTENSIBLE,
+        WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM,
     },
     um::{
         audioclient::{
@@ -28,9 +26,13 @@ use winapi::{
     Class, Interface,
 };
 
-use crate::{Format, SampleFormat, read_unaligned, win::common::{DATAFORMAT_SUBTYPE_IEEE_FLOAT, DATAFORMAT_SUBTYPE_PCM}};
+use crate::{
+    read_unaligned,
+    win::common::{DATAFORMAT_SUBTYPE_IEEE_FLOAT, DATAFORMAT_SUBTYPE_PCM},
+    Format, SampleFormat,
+};
 
-use super::common::{WinError, winapi_result};
+use super::common::{winapi_result, WinError};
 
 pub struct AudioCapture {
     pub buffer_frame_size: u32,

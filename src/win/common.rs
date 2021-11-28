@@ -1,7 +1,17 @@
 use core::fmt;
 use std::ptr::null_mut;
 
-use winapi::{shared::{guiddef, ksmedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, KSDATAFORMAT_SUBTYPE_PCM}, winerror::S_OK}, um::winbase::{FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS, FormatMessageA, LocalFree}};
+use winapi::{
+    shared::{
+        guiddef,
+        ksmedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, KSDATAFORMAT_SUBTYPE_PCM},
+        winerror::S_OK,
+    },
+    um::winbase::{
+        FormatMessageA, LocalFree, FORMAT_MESSAGE_ALLOCATE_BUFFER,
+        FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
+    },
+};
 
 #[macro_export]
 macro_rules! read_unaligned {
