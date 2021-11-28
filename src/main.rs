@@ -1,7 +1,8 @@
 use std::{fmt, mem::size_of, ptr::null_mut, time::Duration};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use winapi::{Class, Interface, shared::{
+use winapi::{
+    shared::{
         guiddef,
         ksmedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, KSDATAFORMAT_SUBTYPE_PCM},
         mmreg::{
@@ -9,19 +10,31 @@ use winapi::{Class, Interface, shared::{
             WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM,
         },
         winerror::S_OK,
-    }, um::{audioclient::{
+    },
+    um::{
+        audioclient::{
             IAudioCaptureClient, IAudioClient,
             AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
             AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR,
-        }, audiosessiontypes::{
+        },
+        audiosessiontypes::{
             AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-        }, combaseapi::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, CoUninitialize}, mmdeviceapi::{
+        },
+        combaseapi::{
+            CoCreateInstance, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+        },
+        mmdeviceapi::{
             eConsole, eRender, IMMDevice, IMMDeviceEnumerator,
             MMDeviceEnumerator,
-        }, objbase::CoInitialize, winbase::{
+        },
+        objbase::CoInitialize,
+        winbase::{
             FormatMessageA, LocalFree, FORMAT_MESSAGE_ALLOCATE_BUFFER,
             FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
-        }}};
+        },
+    },
+    Class, Interface,
+};
 
 macro_rules! read_unaligned {
     ($v:ident $(. $field:ident)*) => {
