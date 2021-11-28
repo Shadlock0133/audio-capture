@@ -2,13 +2,13 @@ mod win;
 
 use std::{
     collections::VecDeque,
-    fmt, io,
-    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    fmt,
+    net::{IpAddr, Ipv4Addr, TcpListener, TcpStream},
     sync::{Arc, Mutex},
     time::Duration,
 };
 
-use bincode::{config::Configuration, Decode, Encode};
+use bincode::{config::Configuration, error::EncodeError, Decode, Encode};
 use structopt::StructOpt;
 use win::capture::*;
 
@@ -80,40 +80,11 @@ enum Packet {
     Data(Vec<f32>),
 }
 
-fn read_packet_from(
-    socket: &mut UdpSocket,
-) -> io::Result<(Packet, SocketAddr)> {
-    let mut buf = [0; 4];
-    let (len, addr) = socket.peek_from(&mut buf)?;
-    if len != 4 {
-        return Err(io::ErrorKind::UnexpectedEof.into());
-    }
-    let size = u32::from_le_bytes(buf);
-    let mut data = vec![0; size as usize + 4];
-    socket.recv_from(&mut data)?;
-    let config = Configuration::standard();
-    let packet = bincode::decode_from_slice(&data[4..], config)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    Ok((packet, addr))
-}
-
-fn read_packet(socket: &mut UdpSocket) -> io::Result<Packet> {
-    let mut buf = [0; 4];
-    let len = socket.peek(&mut buf)?;
-    if len != 4 {
-        return Err(io::ErrorKind::UnexpectedEof.into());
-    }
-    let size = u32::from_le_bytes(buf);
-    let mut data = vec![0; size as usize + 4];
-    socket.recv(&mut data)?;
-    let config = Configuration::standard();
-    let packet = bincode::decode_from_slice(&data[4..], config)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    Ok(packet)
-}
-
 fn server() -> Result<(), Box<dyn std::error::Error>> {
-    let mut socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, PORT))?;
+    eprintln!("!!! Warning !!!");
+    eprintln!("Do not connect from same computer as server");
+    eprintln!("");
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, PORT))?;
     let audio_buffer =
         Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(48000)));
 
@@ -139,37 +110,32 @@ fn server() -> Result<(), Box<dyn std::error::Error>> {
     stream.play()?;
     eprintln!("Audio playback started");
 
-    loop {
-        let (packet, addr) = read_packet_from(&mut socket)?;
+    let config = Configuration::standard();
+    'main: for stream in listener.incoming() {
+        let mut stream = stream?;
+        let packet = bincode::decode_from_std_read(&mut stream, config)?;
         if let Packet::Henlo(name, _) = packet {
             eprintln!("Client connected: {}", name);
-            socket.connect(addr)?;
             loop {
-                if let Packet::Data(data) = read_packet(&mut socket)? {
+                let packet =
+                    match bincode::decode_from_std_read(&mut stream, config) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("Data read error: {}", e);
+                            eprintln!("Back to listening");
+                            continue 'main;
+                        }
+                    };
+                if let Packet::Data(data) = packet {
                     audio_buffer.lock().unwrap().extend(data);
                 }
             }
         }
     }
-}
-
-fn send_packet(socket: &mut UdpSocket, packet: Packet) -> io::Result<()> {
-    let config = Configuration::standard();
-    let buf = bincode::encode_to_vec(packet, config)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    socket.send(&buf)?;
     Ok(())
 }
 
 fn client(addr: IpAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let mut socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
-    eprintln!(
-        "Socket bound at port {}",
-        socket.local_addr().unwrap().port()
-    );
-    eprintln!("Attempting connection to {}", addr);
-    socket.connect((addr, PORT))?;
-
     let buffer_duration = Duration::from_millis(100);
     let mut audio_capture = AudioCapture::init(buffer_duration).unwrap();
     eprintln!("Audio capture initialized");
@@ -180,25 +146,51 @@ fn client(addr: IpAddr) -> Result<(), Box<dyn std::error::Error>> {
         todo!("sample formats different than f32");
     }
 
-    send_packet(&mut socket, Packet::Henlo("client 0.1".into(), format))?;
-    eprintln!("henlo sent");
-
     let actual_duration = Duration::from_secs_f32(
         buffer_duration.as_secs_f32() * audio_capture.buffer_frame_size as f32
             / format.sample_rate as f32
             / 1000.,
     ) / 2;
 
-    audio_capture.start().unwrap();
-    eprintln!("Audio capture started");
+    'main: loop {
+        let _ = audio_capture.stop();
+        let mut stream = loop {
+            if let Ok(s) = TcpStream::connect((addr, PORT)) {
+                break s;
+            }
+            std::thread::sleep(Duration::from_secs(5));
+        };
+        eprintln!(
+            "Socket bound at port {}",
+            stream.local_addr().unwrap().port()
+        );
 
-    loop {
-        std::thread::sleep(actual_duration);
-        audio_capture
-            .read_samples(|data, _| {
-                send_packet(&mut socket, Packet::Data(data.to_vec())).unwrap();
-            })
-            .unwrap();
+        let config = Configuration::standard();
+        bincode::encode_into_std_write(
+            Packet::Henlo("client 0.1".into(), format),
+            &mut stream,
+            config,
+        )?;
+        eprintln!("henlo sent");
+
+        audio_capture.start().unwrap();
+        eprintln!("Audio capture started");
+
+        loop {
+            std::thread::sleep(actual_duration);
+            let res = audio_capture.read_samples(|data, _| {
+                bincode::encode_into_std_write(
+                    Packet::Data(data.to_vec()),
+                    &mut stream,
+                    config,
+                )?;
+                Ok::<_, EncodeError>(())
+            });
+            if let Err(e) = res {
+                eprintln!("Error: {:?}", e);
+                continue 'main;
+            }
+        }
     }
 }
 
@@ -222,14 +214,6 @@ impl SampleFormat {
             SampleFormat::Int8 => 8,
             SampleFormat::Int16 => 16,
             SampleFormat::Float32 => 32,
-        }
-    }
-
-    pub fn to_hound(self) -> hound::SampleFormat {
-        match self {
-            SampleFormat::Int8 => hound::SampleFormat::Int,
-            SampleFormat::Int16 => hound::SampleFormat::Int,
-            SampleFormat::Float32 => hound::SampleFormat::Float,
         }
     }
 }

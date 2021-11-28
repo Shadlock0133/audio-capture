@@ -24,12 +24,11 @@ pub struct WinError(pub i32);
 
 impl fmt::Debug for WinError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("WinError")
-            .field(&error_to_string(self.0))
-            .finish()
+        write!(f, "WinError(id: {:x}, {})", self.0, error_to_string(self.0))
     }
 }
 
+#[track_caller]
 pub fn winapi_result(hresult: i32) -> Result<(), WinError> {
     if hresult == S_OK {
         Ok(())

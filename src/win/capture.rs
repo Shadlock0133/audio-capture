@@ -183,9 +183,12 @@ impl AudioCapture {
         winapi_result(unsafe { (*self.client).Stop() })
     }
 
-    pub fn read_samples<F>(&mut self, mut f: F) -> Result<(), WinError>
+    pub fn read_samples<E, F>(
+        &mut self,
+        mut f: F,
+    ) -> Result<(), ReadSamplesError<E>>
     where
-        F: FnMut(&[f32], Info),
+        F: FnMut(&[f32], Info) -> Result<(), E>,
     {
         let mut packet_length = 0;
         winapi_result(unsafe {
@@ -225,17 +228,31 @@ impl AudioCapture {
                 timestamp_error,
             };
 
-            f(data, info);
+            let r = f(data, info).map_err(|e| ReadSamplesError::E(e));
 
             winapi_result(unsafe {
                 (*self.capture_client).ReleaseBuffer(buffer_size)
             })?;
+
+            r?;
 
             winapi_result(unsafe {
                 (*self.capture_client).GetNextPacketSize(&mut packet_length)
             })?;
         }
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum ReadSamplesError<E> {
+    E(E),
+    WinError(WinError),
+}
+
+impl<E> From<WinError> for ReadSamplesError<E> {
+    fn from(e: WinError) -> Self {
+        Self::WinError(e)
     }
 }
 
