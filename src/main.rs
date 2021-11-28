@@ -1,61 +1,38 @@
-use std::{fmt, mem::size_of, ptr::null_mut, time::Duration};
+mod win;
+
+use std::time::Duration;
+
+use win::capture::*;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use winapi::{
-    shared::{
-        guiddef,
-        ksmedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, KSDATAFORMAT_SUBTYPE_PCM},
-        mmreg::{
-            WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVE_FORMAT_EXTENSIBLE,
-            WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM,
-        },
-        winerror::S_OK,
-    },
-    um::{
-        audioclient::{
-            IAudioCaptureClient, IAudioClient,
-            AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
-            AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR,
-        },
-        audiosessiontypes::{
-            AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-        },
-        combaseapi::{
-            CoCreateInstance, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
-        },
-        mmdeviceapi::{
-            eConsole, eRender, IMMDevice, IMMDeviceEnumerator,
-            MMDeviceEnumerator,
-        },
-        objbase::CoInitialize,
-        winbase::{
-            FormatMessageA, LocalFree, FORMAT_MESSAGE_ALLOCATE_BUFFER,
-            FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
-        },
-    },
-    Class, Interface,
-};
 
-macro_rules! read_unaligned {
-    ($v:ident $(. $field:ident)*) => {
-        std::ptr::addr_of!((*$v) $(.$field)* ).read_unaligned()
-    };
+struct AudioPlayback {
+    device: cpal::Device,
+    config: cpal::StreamConfig,
+}
+
+impl AudioPlayback {
+    fn init(channels: u16) -> Result<Self, ()> {
+        let host = cpal::default_host();
+        let device = host.default_output_device().ok_or(())?;
+        let config = device
+            .supported_output_configs()
+            .map_err(|_| ())?
+            .filter(|x| x.channels() == channels)
+            .next()
+            .ok_or(())?
+            // .with_sample_rate(SampleRate(sample_rate))
+            .with_max_sample_rate()
+            .config();
+        Ok(Self { device, config })
+    }
 }
 
 fn _playback() {
-    let host = cpal::default_host();
-    let device = host.default_output_device().unwrap();
-    let config = device
-        .supported_output_configs()
-        .unwrap()
-        .filter(|x| x.channels() == 2)
-        .next()
-        .unwrap()
-        // .with_sample_rate(SampleRate(sample_rate))
-        .with_max_sample_rate()
-        .config();
+    let channels = 2;
+    let playback = AudioPlayback::init(channels).unwrap();
 
-    let sample_rate = config.sample_rate.0;
+    let sample_rate = playback.config.sample_rate.0;
 
     let volume = 3000.;
     let mut iter = (0..(4 * sample_rate)).map(move |i| {
@@ -67,14 +44,16 @@ fn _playback() {
             ((i as f32 * 6000. / sample_rate as f32).sin() * volume) as i16;
         (sample_a + sample_b + sample_c) / 3
     });
-    let stream = device
+    let stream = playback
+        .device
         .build_output_stream(
-            &config,
+            &playback.config,
             move |data: &mut [i16], _| {
-                for d in data.chunks_exact_mut(2) {
+                for d in data.chunks_exact_mut(channels as usize) {
                     let sample = iter.next().unwrap_or_default();
-                    d[0] = sample;
-                    d[1] = sample;
+                    for d in d {
+                        *d = sample;
+                    }
                 }
             },
             |err| {
@@ -84,258 +63,6 @@ fn _playback() {
         .unwrap();
     stream.play().unwrap();
     std::thread::sleep(Duration::from_secs(4));
-}
-
-struct WinError(i32);
-
-impl fmt::Debug for WinError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("WinError")
-            .field(&error_to_string(self.0))
-            .finish()
-    }
-}
-
-fn winapi_result(hresult: i32) -> Result<(), WinError> {
-    if hresult == S_OK {
-        Ok(())
-    } else {
-        Err(WinError(hresult))
-    }
-}
-
-struct AudioCapture {
-    buffer_frame_size: u32,
-    wave_format: *mut WAVEFORMATEX,
-    channels: u16,
-    enumerator: *mut IMMDeviceEnumerator,
-    device: *mut IMMDevice,
-    client: *mut IAudioClient,
-    capture_client: *mut IAudioCaptureClient,
-}
-
-impl AudioCapture {
-    fn init(buffer_duration: Duration) -> Result<Self, WinError> {
-        winapi_result(unsafe { CoInitialize(null_mut()) })?;
-
-        let mut enumerator: *mut IMMDeviceEnumerator = null_mut();
-        winapi_result(unsafe {
-            CoCreateInstance(
-                &MMDeviceEnumerator::uuidof(),
-                null_mut(),
-                CLSCTX_ALL,
-                &IMMDeviceEnumerator::uuidof(),
-                &mut enumerator as *mut _ as _,
-            )
-        })?;
-
-        let mut device: *mut IMMDevice = null_mut();
-        winapi_result(unsafe {
-            (&*enumerator).GetDefaultAudioEndpoint(
-                eRender,
-                eConsole,
-                &mut device,
-            )
-        })?;
-
-        let mut client: *mut IAudioClient = null_mut();
-        winapi_result(unsafe {
-            (&*device).Activate(
-                &IAudioClient::uuidof(),
-                CLSCTX_ALL,
-                null_mut(),
-                &mut client as *mut _ as _,
-            )
-        })?;
-
-        let mut wave_format: *mut WAVEFORMATEX = null_mut();
-        winapi_result(unsafe { (&*client).GetMixFormat(&mut wave_format) })
-            .unwrap();
-
-        let channels = unsafe { read_unaligned!(wave_format.nChannels) };
-
-        // 100ns unit
-        let dur = (buffer_duration.as_secs() as i64)
-            .checked_mul(100_000_000_000)
-            .expect("duration math overflow")
-            .checked_add(buffer_duration.subsec_nanos() as i64 * 100)
-            .expect("duration math overflow");
-        winapi_result(unsafe {
-            (&*client).Initialize(
-                AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK,
-                dur,
-                0,
-                wave_format,
-                null_mut(),
-            )
-        })
-        .unwrap();
-
-        let mut buffer_frame_size = 0;
-        winapi_result(unsafe {
-            (&*client).GetBufferSize(&mut buffer_frame_size)
-        })
-        .unwrap();
-
-        let mut capture_client: *mut IAudioCaptureClient = null_mut();
-        winapi_result(unsafe {
-            (&*client).GetService(
-                &IAudioCaptureClient::uuidof(),
-                &mut capture_client as *mut _ as _,
-            )
-        })
-        .unwrap();
-
-        Ok(Self {
-            buffer_frame_size,
-            wave_format,
-            channels,
-            enumerator,
-            device,
-            client,
-            capture_client,
-        })
-    }
-
-    fn format(&self) -> Result<Format, UnknownFormat> {
-        let wave_format = self.wave_format;
-
-        let channels;
-        let sample_rate;
-        let sample_format;
-        unsafe {
-            let sample_bitsize = read_unaligned!(wave_format.wBitsPerSample);
-            let struct_size = read_unaligned!(wave_format.cbSize);
-            let format_tag = read_unaligned!(wave_format.wFormatTag);
-            sample_format = match (format_tag, sample_bitsize) {
-                (WAVE_FORMAT_PCM, 8) => Some(SampleFormat::Int8),
-                (WAVE_FORMAT_PCM, 16) => Some(SampleFormat::Int16),
-                (WAVE_FORMAT_IEEE_FLOAT, 32) => Some(SampleFormat::Float32),
-                (WAVE_FORMAT_EXTENSIBLE, _)
-                    if size_of::<WAVEFORMATEXTENSIBLE>()
-                        - size_of::<WAVEFORMATEX>()
-                        == struct_size as usize =>
-                {
-                    let wave_format: *mut WAVEFORMATEXTENSIBLE =
-                        wave_format as _;
-                    let format_guid = read_unaligned!(wave_format.SubFormat);
-                    match (format_guid.into(), sample_bitsize) {
-                        (DATAFORMAT_SUBTYPE_PCM, 8) => Some(SampleFormat::Int8),
-                        (DATAFORMAT_SUBTYPE_PCM, 16) => {
-                            Some(SampleFormat::Int16)
-                        }
-                        (DATAFORMAT_SUBTYPE_IEEE_FLOAT, 32) => {
-                            Some(SampleFormat::Float32)
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
-            sample_rate = read_unaligned!(wave_format.nSamplesPerSec);
-            channels = read_unaligned!(wave_format.nChannels);
-        }
-        let sample_format = sample_format.ok_or(UnknownFormat)?;
-
-        Ok(Format {
-            channels,
-            sample_rate,
-            sample_format,
-        })
-    }
-
-    fn start(&mut self) -> Result<(), WinError> {
-        winapi_result(unsafe { (*self.client).Start() })
-    }
-
-    fn stop(&mut self) -> Result<(), WinError> {
-        winapi_result(unsafe { (*self.client).Stop() })
-    }
-
-    fn read_samples<F>(&mut self, mut f: F) -> Result<(), WinError>
-    where
-        F: FnMut(&[f32], Info),
-    {
-        let mut packet_length = 0;
-        winapi_result(unsafe {
-            (*self.capture_client).GetNextPacketSize(&mut packet_length)
-        })?;
-
-        while packet_length > 0 {
-            let mut buffer: *mut u8 = null_mut();
-            let mut buffer_size = 0;
-            let mut flags = 0;
-            winapi_result(unsafe {
-                (*self.capture_client).GetBuffer(
-                    &mut buffer,
-                    &mut buffer_size,
-                    &mut flags,
-                    null_mut(),
-                    null_mut(),
-                )
-            })?;
-
-            let is_silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
-            let data_discontinuity =
-                (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
-            let timestamp_error =
-                (flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) != 0;
-
-            let data = unsafe {
-                std::slice::from_raw_parts(
-                    buffer as *mut f32,
-                    buffer_size as usize * self.channels as usize,
-                )
-            };
-
-            let info = Info {
-                is_silent,
-                data_discontinuity,
-                timestamp_error,
-            };
-
-            f(data, info);
-
-            winapi_result(unsafe {
-                (*self.capture_client).ReleaseBuffer(buffer_size)
-            })?;
-
-            winapi_result(unsafe {
-                (*self.capture_client).GetNextPacketSize(&mut packet_length)
-            })?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for AudioCapture {
-    fn drop(&mut self) {
-        unsafe {
-            CoTaskMemFree(self.wave_format as _);
-            (*self.capture_client).Release();
-            (*self.client).Release();
-            (*self.device).Release();
-            (*self.enumerator).Release();
-            CoUninitialize();
-        }
-    }
-}
-
-#[allow(unused)]
-struct Info {
-    pub is_silent: bool,
-    pub data_discontinuity: bool,
-    pub timestamp_error: bool,
-}
-
-#[derive(Debug)]
-struct UnknownFormat;
-
-struct Format {
-    pub channels: u16,
-    pub sample_rate: u32,
-    pub sample_format: SampleFormat,
 }
 
 fn main() {
@@ -392,14 +119,21 @@ fn main() {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum SampleFormat {
+pub struct Format {
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub sample_format: SampleFormat,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum SampleFormat {
     Int8,
     Int16,
     Float32,
 }
 
 impl SampleFormat {
-    fn bits_per_sample(self) -> u16 {
+    pub fn bits_per_sample(self) -> u16 {
         match self {
             SampleFormat::Int8 => 8,
             SampleFormat::Int16 => 16,
@@ -407,56 +141,11 @@ impl SampleFormat {
         }
     }
 
-    fn to_hound(self) -> hound::SampleFormat {
+    pub fn to_hound(self) -> hound::SampleFormat {
         match self {
             SampleFormat::Int8 => hound::SampleFormat::Int,
             SampleFormat::Int16 => hound::SampleFormat::Int,
             SampleFormat::Float32 => hound::SampleFormat::Float,
         }
-    }
-}
-
-#[derive(PartialEq, Eq)]
-struct Guid(u32, u16, u16, [u8; 8]);
-
-impl Guid {
-    const fn from_winapi(guid: guiddef::GUID) -> Self {
-        Self(guid.Data1, guid.Data2, guid.Data3, guid.Data4)
-    }
-}
-
-impl From<guiddef::GUID> for Guid {
-    fn from(guid: guiddef::GUID) -> Self {
-        Self::from_winapi(guid)
-    }
-}
-
-const _AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM: u32 = 0x80000000;
-const _AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY: u32 = 0x08000000;
-
-const DATAFORMAT_SUBTYPE_PCM: Guid =
-    Guid::from_winapi(KSDATAFORMAT_SUBTYPE_PCM);
-const DATAFORMAT_SUBTYPE_IEEE_FLOAT: Guid =
-    Guid::from_winapi(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
-
-fn error_to_string(code: i32) -> String {
-    let mut buffer: *mut i8 = null_mut();
-    unsafe {
-        let size = FormatMessageA(
-            FORMAT_MESSAGE_ALLOCATE_BUFFER
-                | FORMAT_MESSAGE_FROM_SYSTEM
-                | FORMAT_MESSAGE_IGNORE_INSERTS,
-            null_mut(),
-            code as u32,
-            0,
-            &mut buffer as *mut _ as *mut i8,
-            0,
-            null_mut(),
-        );
-        let slice = std::slice::from_raw_parts(buffer as _, size as usize);
-        let str = std::str::from_utf8(slice).unwrap();
-        let string = str.to_string();
-        LocalFree(buffer as _);
-        string
     }
 }
