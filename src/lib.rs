@@ -1,15 +1,15 @@
-use bincode::{Decode, Encode};
-
 pub mod win;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Decode, Encode)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 pub struct Format {
     pub channels: u16,
     pub sample_rate: u32,
     pub sample_format: SampleFormat,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Decode, Encode)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 pub enum SampleFormat {
     Int8,
     Int16,
