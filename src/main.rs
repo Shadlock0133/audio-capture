@@ -1,5 +1,3 @@
-mod win;
-
 use std::{
     collections::VecDeque,
     fmt,
@@ -9,8 +7,8 @@ use std::{
 };
 
 use bincode::{config::Configuration, error::EncodeError, Decode, Encode};
+use earplugs::{win::capture::*, Format, SampleFormat};
 use structopt::StructOpt;
-use win::capture::*;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -74,9 +72,7 @@ const PORT: u16 = 5134;
 
 #[derive(Decode, Encode)]
 enum Packet {
-    // hnlo
     Henlo(String, Format),
-    // data
     Data(Vec<f32>),
 }
 
@@ -116,6 +112,7 @@ fn server() -> Result<(), Box<dyn std::error::Error>> {
         let packet = bincode::decode_from_std_read(&mut stream, config)?;
         if let Packet::Henlo(name, _) = packet {
             eprintln!("Client connected: {}", name);
+            let mut stream = snap::read::FrameDecoder::new(stream);
             loop {
                 let packet =
                     match bincode::decode_from_std_read(&mut stream, config) {
@@ -155,10 +152,11 @@ fn client(addr: IpAddr) -> Result<(), Box<dyn std::error::Error>> {
     'main: loop {
         let _ = audio_capture.stop();
         let mut stream = loop {
-            if let Ok(s) = TcpStream::connect((addr, PORT)) {
-                break s;
+            match TcpStream::connect((addr, PORT)) {
+                Ok(s) => break s,
+                Err(e) => eprintln!("connecton error: {}", e),
             }
-            std::thread::sleep(Duration::from_secs(5));
+            std::thread::sleep(Duration::from_secs(10));
         };
         eprintln!(
             "Socket bound at port {}",
@@ -176,9 +174,14 @@ fn client(addr: IpAddr) -> Result<(), Box<dyn std::error::Error>> {
         audio_capture.start().unwrap();
         eprintln!("Audio capture started");
 
+        let mut iter = (0u64..)
+            .map(|i| (i as f32 * 2000. / format.sample_rate as f32).sin());
+
+        let mut stream = snap::write::FrameEncoder::new(stream);
         loop {
             std::thread::sleep(actual_duration);
             let res = audio_capture.read_samples(|data, _| {
+                let data = (&mut iter).take(data.len()).collect::<Vec<_>>();
                 bincode::encode_into_std_write(
                     Packet::Data(data.to_vec()),
                     &mut stream,
@@ -190,30 +193,6 @@ fn client(addr: IpAddr) -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("Error: {:?}", e);
                 continue 'main;
             }
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Decode, Encode)]
-pub struct Format {
-    pub channels: u16,
-    pub sample_rate: u32,
-    pub sample_format: SampleFormat,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Decode, Encode)]
-pub enum SampleFormat {
-    Int8,
-    Int16,
-    Float32,
-}
-
-impl SampleFormat {
-    pub fn bits_per_sample(self) -> u16 {
-        match self {
-            SampleFormat::Int8 => 8,
-            SampleFormat::Int16 => 16,
-            SampleFormat::Float32 => 32,
         }
     }
 }
