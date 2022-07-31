@@ -1,4 +1,4 @@
-use std::{mem::size_of, ptr::null_mut, time::Duration};
+use std::{fmt, mem::size_of, ptr::null_mut, time::Duration};
 
 use winapi::{
     shared::mmreg::{
@@ -244,10 +244,36 @@ impl AudioCapture {
     }
 }
 
-#[derive(Debug)]
 pub enum ReadSamplesError<E> {
     E(E),
     WinError(WinError),
+}
+
+impl<E: fmt::Debug> fmt::Debug for ReadSamplesError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::E(e) => e.fmt(f),
+            Self::WinError(e) => e.fmt(f),
+        }
+    }
+}
+
+impl<E: fmt::Display> fmt::Display for ReadSamplesError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::E(e) => e.fmt(f),
+            Self::WinError(e) => e.fmt(f),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for ReadSamplesError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ReadSamplesError::E(e) => Some(e),
+            ReadSamplesError::WinError(e) => Some(e),
+        }
+    }
 }
 
 impl<E> From<WinError> for ReadSamplesError<E> {
@@ -278,3 +304,11 @@ pub struct Info {
 
 #[derive(Debug)]
 pub struct UnknownFormat;
+
+impl fmt::Display for UnknownFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for UnknownFormat {}

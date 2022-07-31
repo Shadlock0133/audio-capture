@@ -28,6 +28,14 @@ impl fmt::Debug for WinError {
     }
 }
 
+impl fmt::Display for WinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", error_to_string(self.0))
+    }
+}
+
+impl std::error::Error for WinError {}
+
 #[track_caller]
 pub fn winapi_result(hresult: i32) -> Result<(), WinError> {
     if hresult == S_OK {
