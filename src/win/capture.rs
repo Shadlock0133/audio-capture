@@ -292,6 +292,9 @@ impl<E> From<WinError> for ReadSamplesError<E> {
     }
 }
 
+unsafe impl Send for AudioCapture {}
+unsafe impl Sync for AudioCapture {}
+
 impl Drop for AudioCapture {
     fn drop(&mut self) {
         unsafe {
