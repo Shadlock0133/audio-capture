@@ -42,11 +42,14 @@ pub struct AudioCapture {
     pub device: *mut IMMDevice,
     pub client: *mut IAudioClient,
     pub capture_client: *mut IAudioCaptureClient,
+    // other library might have run CoInitialize already
+    should_run_couninitalize_on_drop: bool,
 }
 
 impl AudioCapture {
     pub fn init(buffer_duration: Duration) -> Result<Self, WinError> {
-        winapi_result(unsafe { CoInitialize(null_mut()) })?;
+        let should_run_couninitilize_on_drop =
+            winapi_result(unsafe { CoInitialize(null_mut()) }).is_ok();
 
         let mut enumerator: *mut IMMDeviceEnumerator = null_mut();
         winapi_result(unsafe {
@@ -125,6 +128,7 @@ impl AudioCapture {
             device,
             client,
             capture_client,
+            should_run_couninitalize_on_drop: should_run_couninitilize_on_drop,
         })
     }
 
@@ -183,6 +187,12 @@ impl AudioCapture {
         winapi_result(unsafe { (*self.client).Stop() })
     }
 
+    /// Reads samples from system's internal queue, running provided callback
+    /// for each "packet", then return.
+    /// 
+    /// You will need to call this function in loop to keep reading new samples,
+    /// as it doesn't spawn background thread for you. It's done this way to
+    /// be more flexible for users.
     pub fn read_samples<E, F>(
         &mut self,
         mut f: F,
@@ -290,7 +300,10 @@ impl Drop for AudioCapture {
             (*self.client).Release();
             (*self.device).Release();
             (*self.enumerator).Release();
-            CoUninitialize();
+
+            if self.should_run_couninitalize_on_drop {
+                CoUninitialize();
+            }
         }
     }
 }
